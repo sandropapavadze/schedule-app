@@ -288,6 +288,57 @@
             margin-bottom: 10px;
         }
 
+        .sync-section {
+            background: #e8f5e9;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .sync-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 10px 5px;
+            transition: all 0.3s;
+        }
+
+        .sync-btn:hover {
+            background: #45a049;
+        }
+
+        .sync-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .sync-status {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+
+        .sync-status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .sync-status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .sync-status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
         .copy-options {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
@@ -325,6 +376,15 @@
         <div class="week-grid" id="weekGrid"></div>
 
         <div class="stats" id="stats"></div>
+
+        <div class="sync-section">
+            <h3 style="color: #4CAF50; margin-bottom: 15px;">☁️ Google Drive სინქრონიზაცია</h3>
+            <p style="color: #666; margin-bottom: 15px;">შეინახე შენი ცხრილი Google Drive-ზე და გამოიყენე ნებისმიერი მოწყობილობიდან!</p>
+            <button id="authBtn" class="sync-btn" onclick="handleAuth()">🔐 Google-ით ავტორიზაცია</button>
+            <button id="uploadBtn" class="sync-btn" onclick="uploadToDrive()" disabled>⬆️ ატვირთვა Drive-ზე</button>
+            <button id="downloadBtn" class="sync-btn" onclick="downloadFromDrive()" disabled>⬇️ ჩამოტვირთვა Drive-დან</button>
+            <div id="syncStatus" class="sync-status" style="display: none;"></div>
+        </div>
     </div>
 
     <!-- Modal for adding lessons -->
@@ -369,7 +429,18 @@
         </div>
     </div>
 
+    <script src="https://apis.google.com/js/api.js"></script>
     <script>
+        // Google Drive API configuration
+        const CLIENT_ID = 'YOUR_CLIENT_ID_HERE.apps.googleusercontent.com';
+        const API_KEY = 'YOUR_API_KEY_HERE';
+        const DISCOVERY_DOCS = ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"];
+        const SCOPES = 'https://www.googleapis.com/auth/drive.file';
+        const FILE_NAME = 'schedule-app-data.json';
+
+        let isSignedIn = false;
+        let driveFileId = null;
+
         // Days of the week in Georgian
         const days = [
             'ორშაბათი',
@@ -396,6 +467,174 @@
         let editingIndex = -1; // -1 means adding new, >= 0 means editing
         let copyFromDay = '';
         let selectedCopyDays = [];
+
+        // Initialize Google API
+        function initGoogleAPI() {
+            gapi.load('client:auth2', initClient);
+        }
+
+        function initClient() {
+            gapi.client.init({
+                apiKey: API_KEY,
+                clientId: CLIENT_ID,
+                discoveryDocs: DISCOVERY_DOCS,
+                scope: SCOPES
+            }).then(() => {
+                gapi.auth2.getAuthInstance().isSignedIn.listen(updateSigninStatus);
+                updateSigninStatus(gapi.auth2.getAuthInstance().isSignedIn.get());
+            }).catch((error) => {
+                showSyncStatus('Google API ინიციალიზაცია ვერ მოხერხდა. გთხოვთ შეამოწმოთ CLIENT_ID და API_KEY', 'error');
+            });
+        }
+
+        function updateSigninStatus(signedIn) {
+            isSignedIn = signedIn;
+            const authBtn = document.getElementById('authBtn');
+            const uploadBtn = document.getElementById('uploadBtn');
+            const downloadBtn = document.getElementById('downloadBtn');
+
+            if (signedIn) {
+                authBtn.textContent = '✅ ავტორიზებული';
+                authBtn.disabled = true;
+                uploadBtn.disabled = false;
+                downloadBtn.disabled = false;
+                showSyncStatus('წარმატებით ავტორიზდით Google Drive-ზე!', 'success');
+            } else {
+                authBtn.textContent = '🔐 Google-ით ავტორიზაცია';
+                authBtn.disabled = false;
+                uploadBtn.disabled = true;
+                downloadBtn.disabled = true;
+            }
+        }
+
+        function handleAuth() {
+            if (!isSignedIn) {
+                gapi.auth2.getAuthInstance().signIn();
+            }
+        }
+
+        // Upload schedule to Google Drive
+        async function uploadToDrive() {
+            if (!isSignedIn) {
+                showSyncStatus('პირველ რიგში გაიარეთ ავტორიზაცია!', 'error');
+                return;
+            }
+
+            try {
+                showSyncStatus('მიმდინარეობს ატვირთვა...', 'info');
+
+                const scheduleData = {
+                    schedule: schedule,
+                    lastUpdated: new Date().toISOString()
+                };
+
+                const content = JSON.stringify(scheduleData, null, 2);
+                const file = new Blob([content], { type: 'application/json' });
+
+                // Check if file already exists
+                if (driveFileId) {
+                    // Update existing file
+                    const response = await gapi.client.request({
+                        path: '/upload/drive/v3/files/' + driveFileId,
+                        method: 'PATCH',
+                        params: { uploadType: 'media' },
+                        body: content
+                    });
+                    showSyncStatus('✅ წარმატებით განახლდა Drive-ზე!', 'success');
+                } else {
+                    // Create new file
+                    const metadata = {
+                        name: FILE_NAME,
+                        mimeType: 'application/json'
+                    };
+
+                    const form = new FormData();
+                    form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+                    form.append('file', file);
+
+                    const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                        method: 'POST',
+                        headers: new Headers({ 'Authorization': 'Bearer ' + gapi.auth.getToken().access_token }),
+                        body: form
+                    });
+
+                    const result = await response.json();
+                    driveFileId = result.id;
+                    localStorage.setItem('driveFileId', driveFileId);
+                    showSyncStatus('✅ წარმატებით აიტვირთა Drive-ზე!', 'success');
+                }
+            } catch (error) {
+                console.error('Upload error:', error);
+                showSyncStatus('❌ ატვირთვა ვერ მოხერხდა: ' + error.message, 'error');
+            }
+        }
+
+        // Download schedule from Google Drive
+        async function downloadFromDrive() {
+            if (!isSignedIn) {
+                showSyncStatus('პირველ რიგში გაიარეთ ავტორიზაცია!', 'error');
+                return;
+            }
+
+            try {
+                showSyncStatus('მიმდინარეობს ჩამოტვირთვა...', 'info');
+
+                // Search for the file
+                const response = await gapi.client.drive.files.list({
+                    q: `name='${FILE_NAME}' and trashed=false`,
+                    fields: 'files(id, name)',
+                    spaces: 'drive'
+                });
+
+                const files = response.result.files;
+                if (files && files.length > 0) {
+                    driveFileId = files[0].id;
+                    localStorage.setItem('driveFileId', driveFileId);
+
+                    // Download file content
+                    const fileResponse = await gapi.client.drive.files.get({
+                        fileId: driveFileId,
+                        alt: 'media'
+                    });
+
+                    const data = JSON.parse(fileResponse.body);
+                    schedule = data.schedule;
+                    saveToStorage();
+                    init();
+                    showSyncStatus('✅ წარმატებით ჩამოიტვირთა Drive-დან!', 'success');
+                } else {
+                    showSyncStatus('⚠️ ფაილი არ მოიძებნა Drive-ზე. პირველ რიგში ატვირთეთ მონაცემები.', 'error');
+                }
+            } catch (error) {
+                console.error('Download error:', error);
+                showSyncStatus('❌ ჩამოტვირთვა ვერ მოხერხდა: ' + error.message, 'error');
+            }
+        }
+
+        function showSyncStatus(message, type) {
+            const statusDiv = document.getElementById('syncStatus');
+            statusDiv.textContent = message;
+            statusDiv.className = 'sync-status ' + type;
+            statusDiv.style.display = 'block';
+
+            if (type === 'success' || type === 'error') {
+                setTimeout(() => {
+                    statusDiv.style.display = 'none';
+                }, 5000);
+            }
+        }
+
+        // Load saved Drive file ID
+        const savedFileId = localStorage.getItem('driveFileId');
+        if (savedFileId) {
+            driveFileId = savedFileId;
+        }
+
+        // Initialize Google API when page loads
+        window.onload = function() {
+            initGoogleAPI();
+        };
+
 
         // Initialize the schedule
         function init() {
