@@ -124,10 +124,8 @@ python -m SimpleHTTPServer 8080
 - JavaScript (Vanilla)
 - Google Drive API v3
 - localStorage
-
 ## ავტორი
-
-Schedule App - შექმნილია Claude AI-ს დახმარებით
+[Sandro Papavadze](https://github.com/sandropapavadze)
 
 ## ლიცენზია
 
